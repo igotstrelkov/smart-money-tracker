@@ -17,7 +17,7 @@
   {
     "address": "0xa8e089ade142c95538e06196e09c85681112ad50",
     "name": "Wannac",
-    "rationale": "high-conviction sizing"
+    "rationale": "high-conviction sizing, sports"
   },
   {
     "address": "0x96489abcb9f583d6835c8ef95ffc923d05a86825",
@@ -48,5 +48,60 @@
     "address": "0x85f031d069de300055900c4055c1baeb6bde3f67",
     "name": "RJW1",
     "rationale": "92% buys, $3.5k median"
+  },
+  {
+    "address": "0x3257501508b82c2f7aeb914088b6ed089f362f3b",
+    "name": "sportbetss",
+    "rationale": "crypto specialist, 353 markets, 94% buys"
+  },
+  {
+    "address": "0x16bd7cc71f6da1e77d1d8255677abc75b9bae288",
+    "name": "ddalkkak",
+    "rationale": "selective crypto specialist, 219 markets, 3.2/day"
+  },
+  {
+    "address": "0xe153aa1e19bffbd31168045aac358cb0e00aba59",
+    "name": "c300",
+    "rationale": "crypto specialist, $7k/mo"
+  },
+  {
+    "address": "0x34026514e0bda25f0f9fbb053fe3070cdc8c9446",
+    "name": "madril",
+    "rationale": "high-conviction crypto, $29k median trade"
+  },
+  {
+    "address": "0x2785e7022dc20757108204b13c08cea8613b70ae",
+    "name": "poorsob",
+    "rationale": "patient high-conviction, $11k median, 1.2/day"
+  },
+  {
+    "address": "0xb1ca909e848cc24ec4e220ce1c453bc290c51705",
+    "name": "NonceChaser",
+    "rationale": "politics specialist, $28k/mo, selective"
+  },
+  {
+    "address": "0xecb14ac6e9ca447ce2f2912e6217b43d7b655da3",
+    "name": "SaylorMoon",
+    "rationale": "politics specialist, 208 markets"
+  },
+  {
+    "address": "0xc6587b11a2209e46dfe3928b31c5514a8e33b784",
+    "name": "Erasmus",
+    "rationale": "politics specialist, $5k median trade"
+  },
+  {
+    "address": "0x900e2ba4b715e8e5088899948355d74c796ff6bf",
+    "name": "TheySeemeBuyingTheyHatin",
+    "rationale": "weather specialist, 345 markets"
+  },
+  {
+    "address": "0x6139c42e48cf190e67a0a85d492413b499336b7a",
+    "name": "RememberAmalek",
+    "rationale": "weather specialist, 184 markets"
+  },
+  {
+    "address": "0xe8ff0a56d848954b60e8e8ed99637e3c50ddc93b",
+    "name": "BlindGibbon",
+    "rationale": "selective weather specialist, 2.7/day"
   }
 ]
