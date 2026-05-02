@@ -128,14 +128,8 @@ export function logShadowPosition(
   );
 }
 
-export function getOpenShadowPositions(
-  db: Database.Database
-): ShadowPosition[] {
-  const rows = db
-    .prepare("SELECT * FROM shadow_positions WHERE evaluation_status = 'open'")
-    .all() as Array<Record<string, unknown>>;
-
-  return rows.map((row) => ({
+function mapShadowRow(row: Record<string, unknown>): ShadowPosition {
+  return {
     transactionHash: row.transaction_hash as string,
     leaderWallet: row.leader_wallet as string,
     leaderName: row.leader_name as string,
@@ -153,7 +147,25 @@ export function getOpenShadowPositions(
     evaluatedAt: row.evaluated_at as number | null,
     evaluatedValueUsd: row.evaluated_value_usd as number | null,
     evaluatedPnlUsd: row.evaluated_pnl_usd as number | null,
-  }));
+  };
+}
+
+export function getOpenShadowPositions(
+  db: Database.Database
+): ShadowPosition[] {
+  const rows = db
+    .prepare("SELECT * FROM shadow_positions WHERE evaluation_status = 'open'")
+    .all() as Array<Record<string, unknown>>;
+  return rows.map(mapShadowRow);
+}
+
+export function getAllShadowPositions(
+  db: Database.Database
+): ShadowPosition[] {
+  const rows = db
+    .prepare("SELECT * FROM shadow_positions ORDER BY alert_timestamp DESC")
+    .all() as Array<Record<string, unknown>>;
+  return rows.map(mapShadowRow);
 }
 
 export function updateShadowEvaluation(

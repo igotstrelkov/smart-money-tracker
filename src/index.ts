@@ -1,6 +1,7 @@
 // Entry point for the smart-money tracker.
-// Stage 7.5: polls all wallets, enriches with Gamma + CLOB, sends Telegram alerts,
-// and logs shadow positions for hypothetical copy-trade PnL tracking.
+// Stage 8: production-ready entry point.
+// Polls all wallets, enriches with Gamma + CLOB, sends Telegram alerts,
+// logs shadow positions, handles graceful shutdown.
 
 import "dotenv/config";
 import { mkdirSync } from "node:fs";
@@ -120,7 +121,23 @@ async function main() {
   mkdirSync("data", { recursive: true });
   const db = openDb(DB_PATH);
 
+  // Graceful shutdown
+  const shutdown = (signal: string) => {
+    console.log(`\n[${new Date().toISOString()}] Received ${signal}, shutting down...`);
+    db.close();
+    process.exit(0);
+  };
+  process.on("SIGINT", () => shutdown("SIGINT"));
+  process.on("SIGTERM", () => shutdown("SIGTERM"));
+
+  // Let pm2 restart on unhandled rejections
+  process.on("unhandledRejection", (err) => {
+    console.error("Unhandled rejection, crashing:", err);
+    process.exit(1);
+  });
+
   const names = slate.map((e) => e.name).join(", ");
+  console.log(`[${new Date().toISOString()}] Smart-money tracker starting`);
   console.log(`Watching ${slate.length} wallets: ${names}`);
   console.log(`Poll interval: ${POLL_INTERVAL_MS / 1000}s`);
   console.log(`Shadow size: $${config.shadowSizeUsd}`);

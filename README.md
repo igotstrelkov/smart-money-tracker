@@ -34,3 +34,32 @@ npm install
 ```bash
 npx tsx src/index.ts
 ```
+
+## Deployment
+
+```bash
+git clone <repo>
+cd smart-money-tracker
+cp .env.example .env  # edit with real values
+npm install
+mkdir -p data logs
+pm2 start ecosystem.config.js
+pm2 save
+pm2 startup  # follow the printed command
+```
+
+## Operations
+
+```bash
+pm2 logs smart-money-tracker     # tail logs
+pm2 restart smart-money-tracker  # restart after slate.json edit
+pm2 status                       # health check
+```
+
+## Shadow PnL evaluation
+
+Run on demand to check hypothetical copy-trade performance:
+
+```bash
+npx tsx src/evaluate-shadow.ts
+```
