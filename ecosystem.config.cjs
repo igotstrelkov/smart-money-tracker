@@ -2,7 +2,7 @@ module.exports = {
   apps: [
     {
       name: "smart-money-tracker",
-      script: "tsx",
+      script: "./node_modules/.bin/tsx",
       args: "src/index.ts",
       autorestart: true,
       watch: false,
