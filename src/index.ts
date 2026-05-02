@@ -1,5 +1,5 @@
 // Entry point for the smart-money tracker.
-// Stage 6: polls all wallets, enriches via Gamma cache, sends Telegram alerts.
+// Stage 7: polls all wallets, enriches with Gamma + CLOB, sends Telegram alerts.
 
 import "dotenv/config";
 import { mkdirSync } from "node:fs";
@@ -24,6 +24,24 @@ function formatTelegramMessage(name: string, trade: EnrichedTrade): string {
   const price = trade.price.toFixed(2);
   const size = trade.size.toFixed(0);
   const cost = (trade.price * trade.size).toFixed(2);
+
+  // If we have order book data, use the full enriched format
+  if (trade.bestAsk !== null && trade.slippage !== null && trade.depthWithin2cUsd !== null) {
+    const askStr = trade.bestAsk.toFixed(2);
+    const depthStr = trade.depthWithin2cUsd.toFixed(0);
+    const slipSign = trade.slippage >= 0 ? "+" : "";
+    const slipCents = (trade.slippage * 100).toFixed(0);
+
+    return [
+      `🐋 [${name}] ${trade.side} ${trade.outcome} on "${trade.title}"`,
+      `Their fill: $${price} × ${size} = $${cost}`,
+      `Current ask: $${askStr} ($${depthStr} within 2¢)`,
+      `Slippage if you copy: ${slipSign}${slipCents}¢`,
+      `→ ${trade.eventUrl}`,
+    ].join("\n");
+  }
+
+  // Fallback: simple format without order book data
   return `[${name}] ${trade.side} ${trade.outcome} on "${trade.title}" at $${price} × ${size} ($${cost})\n${trade.eventUrl}`;
 }
 

@@ -24,4 +24,7 @@ export interface MarketMeta {
 
 export interface EnrichedTrade extends Trade {
   eventUrl: string;
+  bestAsk: number | null;
+  depthWithin2cUsd: number | null;
+  slippage: number | null;
 }
