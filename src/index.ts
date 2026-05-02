@@ -1,5 +1,5 @@
 // Entry point for the smart-money tracker.
-// Stage 5: polls all wallets, deduplicates, sends Telegram alerts for new trades.
+// Stage 6: polls all wallets, enriches via Gamma cache, sends Telegram alerts.
 
 import "dotenv/config";
 import { mkdirSync } from "node:fs";
@@ -7,7 +7,8 @@ import { loadSlate } from "./config.js";
 import { fetchTrades } from "./api/data.js";
 import { openDb, hasSeenTrade, markTradeSeen } from "./store.js";
 import { sendTelegram } from "./notify.js";
-import type { Trade } from "./types.js";
+import { enrichTrade } from "./enrich.js";
+import type { Trade, EnrichedTrade } from "./types.js";
 import type { SlateEntry } from "./config.js";
 
 const POLL_INTERVAL_MS = 30_000;
@@ -19,12 +20,11 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function formatTelegramMessage(name: string, trade: Trade): string {
+function formatTelegramMessage(name: string, trade: EnrichedTrade): string {
   const price = trade.price.toFixed(2);
   const size = trade.size.toFixed(0);
   const cost = (trade.price * trade.size).toFixed(2);
-  const url = `https://polymarket.com/event/${trade.slug}`;
-  return `[${name}] ${trade.side} ${trade.outcome} on "${trade.title}" at $${price} × ${size} ($${cost})\n${url}`;
+  return `[${name}] ${trade.side} ${trade.outcome} on "${trade.title}" at $${price} × ${size} ($${cost})\n${trade.eventUrl}`;
 }
 
 function formatConsoleLine(name: string, trade: Trade): string {
@@ -51,7 +51,8 @@ async function pollWallet(
     if (isStale(trade)) continue;
     if (hasSeenTrade(db, trade.transactionHash)) continue;
 
-    const message = formatTelegramMessage(entry.name, trade);
+    const enriched = await enrichTrade(db, trade);
+    const message = formatTelegramMessage(entry.name, enriched);
     console.log(formatConsoleLine(entry.name, trade));
 
     try {

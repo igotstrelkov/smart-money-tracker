@@ -14,3 +14,14 @@ export interface Trade {
   outcome: string;         // "Yes" | "No"
   transactionHash: string;
 }
+
+export interface MarketMeta {
+  conditionId: string;
+  title: string;
+  slug: string;
+  eventSlug: string | null;
+}
+
+export interface EnrichedTrade extends Trade {
+  eventUrl: string;
+}
