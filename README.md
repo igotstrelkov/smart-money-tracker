@@ -43,7 +43,7 @@ cd smart-money-tracker
 cp .env.example .env  # edit with real values
 npm install
 mkdir -p data logs
-pm2 start ecosystem.config.js
+pm2 start ecosystem.config.cjs
 pm2 save
 pm2 startup  # follow the printed command
 ```
