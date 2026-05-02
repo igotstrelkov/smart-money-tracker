@@ -33,7 +33,7 @@ export async function enrichTrade(
     }
   }
 
-  const slug = eventSlug || trade.slug;
+  const slug = trade.eventSlug || eventSlug || trade.slug;
   const eventUrl = `https://polymarket.com/event/${slug}`;
 
   // --- Order book (CLOB) ---

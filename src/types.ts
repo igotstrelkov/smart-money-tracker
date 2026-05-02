@@ -11,6 +11,7 @@ export interface Trade {
   timestamp: number;       // unix seconds
   title: string;
   slug: string;
+  eventSlug: string;       // event-level slug for URL construction
   outcome: string;         // "Yes" | "No"
   transactionHash: string;
 }
