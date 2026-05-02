@@ -1,14 +1,15 @@
 // Entry point for the smart-money tracker.
-// Stage 3: polls one wallet, deduplicates via SQLite, skips stale trades.
+// Stage 4: polls all wallets from slate.json, deduplicates via SQLite.
 
-import "dotenv/config";
 import { mkdirSync } from "node:fs";
+import { loadSlate } from "./config.js";
 import { fetchTrades } from "./api/data.js";
 import { openDb, hasSeenTrade, markTradeSeen } from "./store.js";
 import type { Trade } from "./types.js";
+import type { SlateEntry } from "./config.js";
 
-const WALLET = "0x5bec79df9add70a3892041ab1a5516b60f53b215"; // guongAI
 const POLL_INTERVAL_MS = 30_000;
+const WALLET_DELAY_MS = 200;
 const STALE_THRESHOLD_MS = 5 * 60 * 1000; // 5 minutes
 const DB_PATH = "data/tracker.db";
 
@@ -16,46 +17,66 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function formatTrade(trade: Trade): string {
+function formatTrade(name: string, trade: Trade): string {
   const price = trade.price.toFixed(2);
   const size = trade.size.toFixed(0);
   const cost = (trade.price * trade.size).toFixed(2);
   const time = new Date(trade.timestamp * 1000).toISOString();
-  return `[${time}] ${trade.side} ${trade.outcome} on "${trade.title}" at $${price} × ${size} ($${cost}) — tx:${trade.transactionHash.slice(0, 10)}…`;
+  return `[${time}] [${name}] ${trade.side} ${trade.outcome} on "${trade.title}" at $${price} × ${size} ($${cost})`;
 }
 
 function isStale(trade: Trade): boolean {
-  const tradeMs = trade.timestamp * 1000; // API returns seconds
+  const tradeMs = trade.timestamp * 1000;
   return Date.now() - tradeMs > STALE_THRESHOLD_MS;
 }
 
+async function pollWallet(
+  db: ReturnType<typeof openDb>,
+  entry: SlateEntry
+): Promise<number> {
+  const trades = await fetchTrades(entry.address, 5);
+  let newCount = 0;
+
+  for (const trade of trades) {
+    if (isStale(trade)) continue;
+    if (hasSeenTrade(db, trade.transactionHash)) continue;
+
+    console.log(formatTrade(entry.name, trade));
+    markTradeSeen(db, trade.transactionHash, entry.address);
+    newCount++;
+  }
+
+  return newCount;
+}
+
 async function main() {
+  const slate = loadSlate();
+
   mkdirSync("data", { recursive: true });
   const db = openDb(DB_PATH);
 
-  console.log(`Watching wallet: ${WALLET}`);
+  const names = slate.map((e) => e.name).join(", ");
+  console.log(`Watching ${slate.length} wallets: ${names}`);
   console.log(`Poll interval: ${POLL_INTERVAL_MS / 1000}s`);
   console.log(`DB: ${DB_PATH}`);
 
   while (true) {
-    try {
-      const trades = await fetchTrades(WALLET, 5);
-      let newCount = 0;
+    let totalNew = 0;
 
-      for (const trade of trades) {
-        if (isStale(trade)) continue;
-        if (hasSeenTrade(db, trade.transactionHash)) continue;
-
-        console.log(formatTrade(trade));
-        markTradeSeen(db, trade.transactionHash, WALLET);
-        newCount++;
+    for (let i = 0; i < slate.length; i++) {
+      try {
+        totalNew += await pollWallet(db, slate[i]);
+      } catch (err) {
+        console.error(`Fetch error for ${slate[i].name}:`, err);
       }
 
-      if (newCount === 0) {
-        console.log(`[${new Date().toISOString()}] No new trades.`);
+      if (i < slate.length - 1) {
+        await sleep(WALLET_DELAY_MS);
       }
-    } catch (err) {
-      console.error("Fetch error:", err);
+    }
+
+    if (totalNew === 0) {
+      console.log(`[${new Date().toISOString()}] No new trades.`);
     }
 
     await sleep(POLL_INTERVAL_MS);
