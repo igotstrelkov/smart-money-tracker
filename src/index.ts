@@ -5,13 +5,18 @@
 
 import "dotenv/config";
 import { mkdirSync } from "node:fs";
-import { loadConfig, loadSlate } from "./config.js";
 import { fetchTrades } from "./api/data.js";
-import { openDb, hasSeenTrade, markTradeSeen, logShadowPosition } from "./store.js";
-import { sendTelegram } from "./notify.js";
-import { enrichTrade } from "./enrich.js";
-import type { Trade, EnrichedTrade, ShadowPosition } from "./types.js";
 import type { SlateEntry } from "./config.js";
+import { loadConfig, loadSlate } from "./config.js";
+import { enrichTrade } from "./enrich.js";
+import { sendTelegram } from "./notify.js";
+import {
+  hasSeenTrade,
+  logShadowPosition,
+  markTradeSeen,
+  openDb,
+} from "./store.js";
+import type { EnrichedTrade, ShadowPosition, Trade } from "./types.js";
 
 const POLL_INTERVAL_MS = 30_000;
 const WALLET_DELAY_MS = 200;
@@ -28,7 +33,11 @@ function formatTelegramMessage(name: string, trade: EnrichedTrade): string {
   const cost = (trade.price * trade.size).toFixed(2);
 
   // If we have order book data, use the full enriched format
-  if (trade.bestAsk !== null && trade.slippage !== null && trade.depthWithin2cUsd !== null) {
+  if (
+    trade.bestAsk !== null &&
+    trade.slippage !== null &&
+    trade.depthWithin2cUsd !== null
+  ) {
     const askStr = trade.bestAsk.toFixed(2);
     const depthStr = trade.depthWithin2cUsd.toFixed(0);
     const slipSign = trade.slippage >= 0 ? "+" : "";
@@ -63,13 +72,13 @@ function isStale(trade: Trade): boolean {
 async function pollWallet(
   db: ReturnType<typeof openDb>,
   entry: SlateEntry,
-  shadowSizeUsd: number
+  shadowSizeUsd: number,
 ): Promise<number> {
   const trades = await fetchTrades(entry.address, 5);
   let newCount = 0;
 
   for (const trade of trades) {
-    if (isStale(trade)) continue;
+    //if (isStale(trade)) continue;
     if (hasSeenTrade(db, trade.transactionHash)) continue;
 
     const enriched = await enrichTrade(db, trade);
@@ -104,10 +113,15 @@ async function pollWallet(
           evaluatedPnlUsd: null,
         };
         logShadowPosition(db, shadow);
-        console.log(`Shadow position logged: ${entry.name} BUY ${trade.outcome} @ $${entryPrice.toFixed(2)} ($${shadowSizeUsd})`);
+        console.log(
+          `Shadow position logged: ${entry.name} BUY ${trade.outcome} @ $${entryPrice.toFixed(2)} ($${shadowSizeUsd})`,
+        );
       }
     } catch (err) {
-      console.error(`Telegram send failed for tx ${trade.transactionHash.slice(0, 10)}…, will retry next poll:`, err);
+      console.error(
+        `Telegram send failed for tx ${trade.transactionHash.slice(0, 10)}…, will retry next poll:`,
+        err,
+      );
     }
   }
 
@@ -123,7 +137,9 @@ async function main() {
 
   // Graceful shutdown
   const shutdown = (signal: string) => {
-    console.log(`\n[${new Date().toISOString()}] Received ${signal}, shutting down...`);
+    console.log(
+      `\n[${new Date().toISOString()}] Received ${signal}, shutting down...`,
+    );
     db.close();
     process.exit(0);
   };
