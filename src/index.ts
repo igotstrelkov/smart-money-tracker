@@ -1,10 +1,12 @@
 // Entry point for the smart-money tracker.
-// Stage 4: polls all wallets from slate.json, deduplicates via SQLite.
+// Stage 5: polls all wallets, deduplicates, sends Telegram alerts for new trades.
 
+import "dotenv/config";
 import { mkdirSync } from "node:fs";
 import { loadSlate } from "./config.js";
 import { fetchTrades } from "./api/data.js";
 import { openDb, hasSeenTrade, markTradeSeen } from "./store.js";
+import { sendTelegram } from "./notify.js";
 import type { Trade } from "./types.js";
 import type { SlateEntry } from "./config.js";
 
@@ -17,7 +19,15 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function formatTrade(name: string, trade: Trade): string {
+function formatTelegramMessage(name: string, trade: Trade): string {
+  const price = trade.price.toFixed(2);
+  const size = trade.size.toFixed(0);
+  const cost = (trade.price * trade.size).toFixed(2);
+  const url = `https://polymarket.com/event/${trade.slug}`;
+  return `[${name}] ${trade.side} ${trade.outcome} on "${trade.title}" at $${price} × ${size} ($${cost})\n${url}`;
+}
+
+function formatConsoleLine(name: string, trade: Trade): string {
   const price = trade.price.toFixed(2);
   const size = trade.size.toFixed(0);
   const cost = (trade.price * trade.size).toFixed(2);
@@ -41,9 +51,16 @@ async function pollWallet(
     if (isStale(trade)) continue;
     if (hasSeenTrade(db, trade.transactionHash)) continue;
 
-    console.log(formatTrade(entry.name, trade));
-    markTradeSeen(db, trade.transactionHash, entry.address);
-    newCount++;
+    const message = formatTelegramMessage(entry.name, trade);
+    console.log(formatConsoleLine(entry.name, trade));
+
+    try {
+      await sendTelegram(message);
+      markTradeSeen(db, trade.transactionHash, entry.address);
+      newCount++;
+    } catch (err) {
+      console.error(`Telegram send failed for tx ${trade.transactionHash.slice(0, 10)}…, will retry next poll:`, err);
+    }
   }
 
   return newCount;
