@@ -78,7 +78,7 @@ async function pollWallet(
   let newCount = 0;
 
   for (const trade of trades) {
-    //if (isStale(trade)) continue;
+    if (isStale(trade)) continue;
     if (hasSeenTrade(db, trade.transactionHash)) continue;
 
     const enriched = await enrichTrade(db, trade);
