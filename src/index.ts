@@ -1,14 +1,15 @@
 // Entry point for the smart-money tracker.
-// Stage 7: polls all wallets, enriches with Gamma + CLOB, sends Telegram alerts.
+// Stage 7.5: polls all wallets, enriches with Gamma + CLOB, sends Telegram alerts,
+// and logs shadow positions for hypothetical copy-trade PnL tracking.
 
 import "dotenv/config";
 import { mkdirSync } from "node:fs";
-import { loadSlate } from "./config.js";
+import { loadConfig, loadSlate } from "./config.js";
 import { fetchTrades } from "./api/data.js";
-import { openDb, hasSeenTrade, markTradeSeen } from "./store.js";
+import { openDb, hasSeenTrade, markTradeSeen, logShadowPosition } from "./store.js";
 import { sendTelegram } from "./notify.js";
 import { enrichTrade } from "./enrich.js";
-import type { Trade, EnrichedTrade } from "./types.js";
+import type { Trade, EnrichedTrade, ShadowPosition } from "./types.js";
 import type { SlateEntry } from "./config.js";
 
 const POLL_INTERVAL_MS = 30_000;
@@ -60,7 +61,8 @@ function isStale(trade: Trade): boolean {
 
 async function pollWallet(
   db: ReturnType<typeof openDb>,
-  entry: SlateEntry
+  entry: SlateEntry,
+  shadowSizeUsd: number
 ): Promise<number> {
   const trades = await fetchTrades(entry.address, 5);
   let newCount = 0;
@@ -77,6 +79,32 @@ async function pollWallet(
       await sendTelegram(message);
       markTradeSeen(db, trade.transactionHash, entry.address);
       newCount++;
+
+      // Shadow log BUY trades only (buy-and-hold approximation)
+      if (trade.side === "BUY") {
+        const entryPrice = enriched.bestAsk ?? trade.price + 0.02;
+        const shadow: ShadowPosition = {
+          transactionHash: trade.transactionHash,
+          leaderWallet: entry.address,
+          leaderName: entry.name,
+          conditionId: trade.conditionId,
+          tokenId: trade.asset,
+          outcome: trade.outcome,
+          side: trade.side,
+          leaderFillPrice: trade.price,
+          hypotheticalEntryPrice: entryPrice,
+          hypotheticalSizeUsd: shadowSizeUsd,
+          marketTitle: trade.title,
+          marketSlug: trade.slug,
+          alertTimestamp: Date.now(),
+          evaluationStatus: "open",
+          evaluatedAt: null,
+          evaluatedValueUsd: null,
+          evaluatedPnlUsd: null,
+        };
+        logShadowPosition(db, shadow);
+        console.log(`Shadow position logged: ${entry.name} BUY ${trade.outcome} @ $${entryPrice.toFixed(2)} ($${shadowSizeUsd})`);
+      }
     } catch (err) {
       console.error(`Telegram send failed for tx ${trade.transactionHash.slice(0, 10)}…, will retry next poll:`, err);
     }
@@ -86,6 +114,7 @@ async function pollWallet(
 }
 
 async function main() {
+  const config = loadConfig();
   const slate = loadSlate();
 
   mkdirSync("data", { recursive: true });
@@ -94,6 +123,7 @@ async function main() {
   const names = slate.map((e) => e.name).join(", ");
   console.log(`Watching ${slate.length} wallets: ${names}`);
   console.log(`Poll interval: ${POLL_INTERVAL_MS / 1000}s`);
+  console.log(`Shadow size: $${config.shadowSizeUsd}`);
   console.log(`DB: ${DB_PATH}`);
 
   while (true) {
@@ -101,7 +131,7 @@ async function main() {
 
     for (let i = 0; i < slate.length; i++) {
       try {
-        totalNew += await pollWallet(db, slate[i]);
+        totalNew += await pollWallet(db, slate[i], config.shadowSizeUsd);
       } catch (err) {
         console.error(`Fetch error for ${slate[i].name}:`, err);
       }

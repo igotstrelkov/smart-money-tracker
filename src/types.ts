@@ -28,3 +28,23 @@ export interface EnrichedTrade extends Trade {
   depthWithin2cUsd: number | null;
   slippage: number | null;
 }
+
+export interface ShadowPosition {
+  transactionHash: string;
+  leaderWallet: string;
+  leaderName: string;
+  conditionId: string;
+  tokenId: string;
+  outcome: string;
+  side: string;
+  leaderFillPrice: number;
+  hypotheticalEntryPrice: number;
+  hypotheticalSizeUsd: number;
+  marketTitle: string;
+  marketSlug: string;
+  alertTimestamp: number;
+  evaluationStatus: "open" | "resolved" | "unable_to_value";
+  evaluatedAt: number | null;
+  evaluatedValueUsd: number | null;
+  evaluatedPnlUsd: number | null;
+}

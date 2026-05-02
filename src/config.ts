@@ -8,6 +8,7 @@ import "dotenv/config";
 export interface Config {
   telegramBotToken: string;
   telegramChatId: string;
+  shadowSizeUsd: number;
 }
 
 export interface SlateEntry {
@@ -27,7 +28,9 @@ export function loadConfig(): Config {
     throw new Error("Missing TELEGRAM_CHAT_ID in .env");
   }
 
-  return { telegramBotToken, telegramChatId };
+  const shadowSizeUsd = parseFloat(process.env.SHADOW_SIZE_USD || "10");
+
+  return { telegramBotToken, telegramChatId, shadowSizeUsd };
 }
 
 export function loadSlate(path: string = "slate.json"): SlateEntry[] {
