@@ -29,20 +29,58 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function formatTelegramMessage(name: string, trade: EnrichedTrade): string {
+/**
+ * Returns slippage in cents, or null if it can't be computed
+ * (order book unavailable). Positive = market moved against follower;
+ * negative = moved in follower's favor.
+ */
+function computeSlippageCents(
+  trade: Trade,
+  hypotheticalPrice: number | undefined | null,
+): number | null {
+  if (hypotheticalPrice === undefined || hypotheticalPrice === null) {
+    return null;
+  }
+  if (trade.side === "BUY") {
+    return (hypotheticalPrice - trade.price) * 100;
+  }
+  return (trade.price - hypotheticalPrice) * 100;
+}
+
+/**
+ * Decide whether to send Telegram given a slippage value.
+ * - null slippage (order book unavailable) → allow
+ * - negative slippage (market moved in follower's favor) → allow
+ * - slippage <= threshold → allow
+ * - else → suppress
+ */
+function passesSlippageFilter(
+  slippageCents: number | null,
+  maxSlippageCents: number,
+): boolean {
+  if (slippageCents === null) return true;
+  if (slippageCents < 0) return true;
+  return slippageCents <= maxSlippageCents;
+}
+
+function formatTelegramMessage(
+  name: string,
+  trade: EnrichedTrade,
+  slippageCents: number | null,
+): string {
   const price = trade.price.toFixed(2);
   const size = trade.size.toFixed(0);
   const cost = (trade.price * trade.size).toFixed(2);
 
   if (
     trade.bestAsk !== null &&
-    trade.slippage !== null &&
+    slippageCents !== null &&
     trade.depthWithin2cUsd !== null
   ) {
     const askStr = trade.bestAsk.toFixed(2);
     const depthStr = trade.depthWithin2cUsd.toFixed(0);
-    const slipSign = trade.slippage >= 0 ? "+" : "";
-    const slipCents = (trade.slippage * 100).toFixed(0);
+    const slipSign = slippageCents >= 0 ? "+" : "";
+    const slipCents = slippageCents.toFixed(0);
 
     return [
       `🐋 [${name}] ${trade.side} ${trade.outcome} on "${trade.title}"`,
@@ -73,6 +111,7 @@ async function pollWallet(
   db: ReturnType<typeof openDb>,
   entry: SlateEntry,
   shadowSizeUsd: number,
+  slippageAlertMaxCents: number,
 ): Promise<number> {
   const trades = await fetchTrades(entry.address, 5);
   let newCount = 0;
@@ -93,7 +132,7 @@ async function pollWallet(
       trade.side,
       DUPLICATE_FILL_WINDOW_S,
     );
-    const suppressTelegram = recent !== null;
+    const duplicateFillSuppressed = recent !== null;
 
     // Determine shadow tracking fields and hypothetical price.
     let hypotheticalPrice: number | undefined;
@@ -143,15 +182,28 @@ async function pollWallet(
       );
     }
 
-    if (suppressTelegram) {
+    if (duplicateFillSuppressed) {
       console.log(
         `Telegram suppressed (duplicate fill within ${DUPLICATE_FILL_WINDOW_S}s) for ${entry.name} ${trade.side} on ${trade.title.slice(0, 40)}`,
       );
       continue;
     }
 
+    // Single source of truth for slippage — used by both the filter
+    // decision and the Telegram message body.
+    const slippageCents = computeSlippageCents(trade, hypotheticalPrice);
+
+    if (!passesSlippageFilter(slippageCents, slippageAlertMaxCents)) {
+      // slippageCents is non-null here (passesSlippageFilter only returns
+      // false when slippageCents is a number above the threshold).
+      console.log(
+        `[slippage-filter] suppressed ${trade.side} from ${entry.name} on ${trade.title.slice(0, 40)}: ${(slippageCents as number).toFixed(1)}c > ${slippageAlertMaxCents}c`,
+      );
+      continue;
+    }
+
     try {
-      await sendTelegram(formatTelegramMessage(entry.name, enriched));
+      await sendTelegram(formatTelegramMessage(entry.name, enriched, slippageCents));
     } catch (err) {
       console.error(
         `Telegram send failed for tx ${trade.transactionHash.slice(0, 10)}…:`,
@@ -190,6 +242,7 @@ async function main() {
   console.log(`Watching ${slate.length} wallets: ${names}`);
   console.log(`Poll interval: ${POLL_INTERVAL_MS / 1000}s`);
   console.log(`Shadow size: $${config.shadowSizeUsd}`);
+  console.log(`Slippage filter: ${config.slippageAlertMaxCents}¢ max`);
   console.log(`DB: ${DB_PATH}`);
 
   while (true) {
@@ -197,7 +250,12 @@ async function main() {
 
     for (let i = 0; i < slate.length; i++) {
       try {
-        totalNew += await pollWallet(db, slate[i], config.shadowSizeUsd);
+        totalNew += await pollWallet(
+          db,
+          slate[i],
+          config.shadowSizeUsd,
+          config.slippageAlertMaxCents,
+        );
       } catch (err) {
         console.error(`Fetch error for ${slate[i].name}:`, err);
       }

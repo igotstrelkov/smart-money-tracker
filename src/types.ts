@@ -28,7 +28,6 @@ export interface EnrichedTrade extends Trade {
   bestAsk: number | null;
   bestBid: number | null;
   depthWithin2cUsd: number | null;
-  slippage: number | null;
 }
 
 export interface Alert {

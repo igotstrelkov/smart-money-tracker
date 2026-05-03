@@ -9,6 +9,7 @@ export interface Config {
   telegramBotToken: string;
   telegramChatId: string;
   shadowSizeUsd: number;
+  slippageAlertMaxCents: number;
 }
 
 export interface SlateEntry {
@@ -30,7 +31,25 @@ export function loadConfig(): Config {
 
   const shadowSizeUsd = parseFloat(process.env.SHADOW_SIZE_USD || "10");
 
-  return { telegramBotToken, telegramChatId, shadowSizeUsd };
+  const rawSlippage = process.env.SLIPPAGE_ALERT_MAX_CENTS;
+  let slippageAlertMaxCents = 3;
+  if (rawSlippage !== undefined && rawSlippage !== "") {
+    const parsed = parseFloat(rawSlippage);
+    if (Number.isFinite(parsed) && parsed >= 0) {
+      slippageAlertMaxCents = parsed;
+    } else {
+      console.warn(
+        `Invalid SLIPPAGE_ALERT_MAX_CENTS="${rawSlippage}", defaulting to 3`,
+      );
+    }
+  }
+
+  return {
+    telegramBotToken,
+    telegramChatId,
+    shadowSizeUsd,
+    slippageAlertMaxCents,
+  };
 }
 
 export function loadSlate(path: string = "slate.json"): SlateEntry[] {
