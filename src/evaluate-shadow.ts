@@ -1,128 +1,24 @@
 // Standalone shadow PnL evaluation script.
-// Walks all shadow positions, marks them to current market state, and prints a report.
+// Walks first-BUY alerts that opened shadow positions and replays simple-exit
+// logic: closed by leader sell, resolved by market, or still open / unable to value.
 // Run on demand: npx tsx src/evaluate-shadow.ts
 
-import { openDb, getAllShadowPositions, getOpenShadowPositions, updateShadowEvaluation } from "./store.js";
-import { fetchMarketResolution } from "./api/gamma.js";
 import { fetchOrderBook } from "./api/clob.js";
-import type { ShadowPosition } from "./types.js";
+import { fetchMarketResolution } from "./api/gamma.js";
+import {
+  findFirstSellAfterBuy,
+  getAllAlerts,
+  getShadowedBuyAlerts,
+  openDb,
+  updateShadowEvaluation,
+} from "./store.js";
+import type { Alert } from "./types.js";
 
 const DB_PATH = "data/tracker.db";
-const DELAY_MS = 200; // gentle pacing between API calls
+const DELAY_MS = 200;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-async function evaluateOpenPositions(db: ReturnType<typeof openDb>): Promise<void> {
-  const openPositions = getOpenShadowPositions(db);
-  console.log(`Evaluating ${openPositions.length} open positions...\n`);
-
-  for (let i = 0; i < openPositions.length; i++) {
-    const pos = openPositions[i];
-    const sharesHeld = pos.hypotheticalSizeUsd / pos.hypotheticalEntryPrice;
-
-    try {
-      const resolution = await fetchMarketResolution(pos.conditionId, pos.marketSlug);
-
-      if (!resolution) {
-        console.log(`  [unable_to_value] ${pos.leaderName}: "${pos.marketTitle}" — Gamma returned nothing`);
-        updateShadowEvaluation(db, pos.transactionHash, null, null, "unable_to_value");
-        await sleep(DELAY_MS);
-        continue;
-      }
-
-      if (resolution.closed) {
-        // Market resolved — find outcome price
-        const outcomeIndex = resolution.outcomes.indexOf(pos.outcome);
-        if (outcomeIndex === -1) {
-          console.log(`  [unable_to_value] ${pos.leaderName}: "${pos.marketTitle}" — outcome "${pos.outcome}" not found in ${JSON.stringify(resolution.outcomes)}`);
-          updateShadowEvaluation(db, pos.transactionHash, null, null, "unable_to_value");
-        } else {
-          const finalPrice = resolution.outcomePrices[outcomeIndex];
-          const valueUsd = finalPrice * sharesHeld;
-          const pnlUsd = valueUsd - pos.hypotheticalSizeUsd;
-          console.log(`  [resolved] ${pos.leaderName}: "${pos.marketTitle}" ${pos.outcome} → $${valueUsd.toFixed(2)} (PnL: ${pnlUsd >= 0 ? "+" : ""}$${pnlUsd.toFixed(2)})`);
-          updateShadowEvaluation(db, pos.transactionHash, valueUsd, pnlUsd, "resolved");
-        }
-      } else {
-        // Market still open — mark-to-market using best bid
-        const book = await fetchOrderBook(pos.tokenId);
-        if (book) {
-          const valueUsd = book.bestBid * sharesHeld;
-          const pnlUsd = valueUsd - pos.hypotheticalSizeUsd;
-          console.log(`  [open/mtm] ${pos.leaderName}: "${pos.marketTitle}" ${pos.outcome} → bid $${book.bestBid.toFixed(2)} → $${valueUsd.toFixed(2)} (PnL: ${pnlUsd >= 0 ? "+" : ""}$${pnlUsd.toFixed(2)})`);
-          updateShadowEvaluation(db, pos.transactionHash, valueUsd, pnlUsd, "open");
-        } else {
-          console.log(`  [open/no-book] ${pos.leaderName}: "${pos.marketTitle}" — no order book available`);
-          // Leave as open, don't update value
-        }
-      }
-    } catch (err) {
-      console.error(`  [error] ${pos.leaderName}: "${pos.marketTitle}" —`, err);
-    }
-
-    if (i < openPositions.length - 1) {
-      await sleep(DELAY_MS);
-    }
-  }
-}
-
-function printReport(db: ReturnType<typeof openDb>): void {
-  const all = getAllShadowPositions(db);
-
-  if (all.length === 0) {
-    console.log("\nNo shadow positions recorded yet.");
-    return;
-  }
-
-  const resolved = all.filter((p) => p.evaluationStatus === "resolved");
-  const open = all.filter((p) => p.evaluationStatus === "open");
-  const unableToValue = all.filter((p) => p.evaluationStatus === "unable_to_value");
-
-  const resolvedPnl = resolved.reduce((sum, p) => sum + (p.evaluatedPnlUsd ?? 0), 0);
-  const openPnl = open.reduce((sum, p) => sum + (p.evaluatedPnlUsd ?? 0), 0);
-  const combinedPnl = resolvedPnl + openPnl;
-
-  const today = new Date().toISOString().slice(0, 10);
-
-  console.log(`
-=========================================
- Shadow PnL Report — ${today}
-=========================================
-  total alerts logged:         ${all.length}
-  resolved:                    ${resolved.length}
-  still open (mark-to-market): ${open.length}
-  unable to value:             ${unableToValue.length}
-
-  resolved PnL:                ${formatPnl(resolvedPnl)}
-  open mark-to-market PnL:     ${formatPnl(openPnl)}
-  combined PnL:                ${formatPnl(combinedPnl)}`);
-
-  // Per-leader breakdown
-  const leaderMap = new Map<string, ShadowPosition[]>();
-  for (const p of all) {
-    const existing = leaderMap.get(p.leaderName) ?? [];
-    existing.push(p);
-    leaderMap.set(p.leaderName, existing);
-  }
-
-  console.log("\n  per-leader breakdown:");
-  for (const [name, positions] of leaderMap) {
-    const totalPnl = positions.reduce((sum, p) => sum + (p.evaluatedPnlUsd ?? 0), 0);
-    const losses = positions.filter((p) => (p.evaluatedPnlUsd ?? 0) < 0).reduce((sum, p) => sum + (p.evaluatedPnlUsd ?? 0), 0);
-    const gains = positions.filter((p) => (p.evaluatedPnlUsd ?? 0) > 0).reduce((sum, p) => sum + (p.evaluatedPnlUsd ?? 0), 0);
-    const count = positions.length;
-    console.log(`    ${name.padEnd(22)} ${String(count).padStart(3)} alerts  ${formatPnl(totalPnl).padStart(10)}  (${formatPnl(losses)} / ${formatPnl(gains)})`);
-  }
-
-  console.log(`
-  caveats applied:
-  - Buy-and-hold approximation; ignores leader exits
-  - Hypothetical entry uses best ask at alert time, not actual fill simulation
-  - Open positions valued at current best bid (conservative)
-  - Polymarket fees not deducted (real PnL would be ~2% lower)
-`);
 }
 
 function formatPnl(value: number): string {
@@ -130,10 +26,218 @@ function formatPnl(value: number): string {
   return `${sign}$${value.toFixed(2)}`;
 }
 
+async function evaluateShadowedBuys(db: ReturnType<typeof openDb>): Promise<void> {
+  const buys = getShadowedBuyAlerts(db);
+  console.log(`Evaluating ${buys.length} shadow positions...\n`);
+
+  for (let i = 0; i < buys.length; i++) {
+    const buy = buys[i];
+
+    if (buy.hypotheticalPrice === undefined || buy.hypotheticalSizeUsd === undefined) {
+      console.log(
+        `  [unable_to_value] ${buy.leaderName}: "${buy.marketTitle}" — no entry price recorded`,
+      );
+      updateShadowEvaluation(db, buy.transactionHash, null, null, "unable_to_value");
+      continue;
+    }
+
+    const shares = buy.hypotheticalSizeUsd / buy.hypotheticalPrice;
+
+    try {
+      const closingSell = findFirstSellAfterBuy(
+        db,
+        buy.leaderWallet,
+        buy.conditionId,
+        buy.outcome,
+        buy.alertTimestamp,
+      );
+
+      if (closingSell !== null) {
+        if (closingSell.hypotheticalPrice === undefined) {
+          console.log(
+            `  [unable_to_value] ${buy.leaderName}: "${buy.marketTitle}" — closing sell has no price`,
+          );
+          updateShadowEvaluation(
+            db,
+            buy.transactionHash,
+            null,
+            null,
+            "unable_to_value",
+          );
+        } else {
+          const proceedsUsd = shares * closingSell.hypotheticalPrice;
+          const pnlUsd = proceedsUsd - buy.hypotheticalSizeUsd;
+          console.log(
+            `  [closed_by_sell] ${buy.leaderName}: "${buy.marketTitle}" ${buy.outcome} → exit $${closingSell.hypotheticalPrice.toFixed(2)} → ${formatPnl(pnlUsd)}`,
+          );
+          updateShadowEvaluation(
+            db,
+            buy.transactionHash,
+            proceedsUsd,
+            pnlUsd,
+            "closed_by_sell",
+            closingSell.alertTimestamp,
+          );
+        }
+        await sleep(DELAY_MS);
+        continue;
+      }
+
+      // No closing sell — check market resolution / mark-to-market
+      const resolution = await fetchMarketResolution(buy.conditionId, buy.marketSlug);
+
+      if (!resolution) {
+        console.log(
+          `  [unable_to_value] ${buy.leaderName}: "${buy.marketTitle}" — Gamma returned nothing`,
+        );
+        updateShadowEvaluation(db, buy.transactionHash, null, null, "unable_to_value");
+      } else if (resolution.closed) {
+        const outcomeIndex = resolution.outcomes.indexOf(buy.outcome);
+        if (outcomeIndex === -1) {
+          console.log(
+            `  [unable_to_value] ${buy.leaderName}: "${buy.marketTitle}" — outcome "${buy.outcome}" not found in ${JSON.stringify(resolution.outcomes)}`,
+          );
+          updateShadowEvaluation(
+            db,
+            buy.transactionHash,
+            null,
+            null,
+            "unable_to_value",
+          );
+        } else {
+          const finalPrice = resolution.outcomePrices[outcomeIndex];
+          const proceedsUsd = shares * finalPrice;
+          const pnlUsd = proceedsUsd - buy.hypotheticalSizeUsd;
+          console.log(
+            `  [resolved] ${buy.leaderName}: "${buy.marketTitle}" ${buy.outcome} → $${finalPrice.toFixed(2)} → ${formatPnl(pnlUsd)}`,
+          );
+          updateShadowEvaluation(
+            db,
+            buy.transactionHash,
+            proceedsUsd,
+            pnlUsd,
+            "resolved",
+          );
+        }
+      } else {
+        const book = await fetchOrderBook(buy.tokenId);
+        if (!book) {
+          console.log(
+            `  [unable_to_value] ${buy.leaderName}: "${buy.marketTitle}" — no order book`,
+          );
+          updateShadowEvaluation(
+            db,
+            buy.transactionHash,
+            null,
+            null,
+            "unable_to_value",
+          );
+        } else {
+          const proceedsUsd = shares * book.bestBid;
+          const pnlUsd = proceedsUsd - buy.hypotheticalSizeUsd;
+          console.log(
+            `  [open/mtm] ${buy.leaderName}: "${buy.marketTitle}" ${buy.outcome} → bid $${book.bestBid.toFixed(2)} → ${formatPnl(pnlUsd)}`,
+          );
+          updateShadowEvaluation(db, buy.transactionHash, proceedsUsd, pnlUsd, "open");
+        }
+      }
+    } catch (err) {
+      console.error(`  [error] ${buy.leaderName}: "${buy.marketTitle}" —`, err);
+    }
+
+    if (i < buys.length - 1) {
+      await sleep(DELAY_MS);
+    }
+  }
+}
+
+function printReport(db: ReturnType<typeof openDb>): void {
+  const all = getAllAlerts(db);
+
+  if (all.length === 0) {
+    console.log("\nNo alerts recorded yet.");
+    return;
+  }
+
+  const buyAlerts = all.filter((a) => a.side === "BUY");
+  const sellAlerts = all.filter((a) => a.side === "SELL");
+  const shadowed = buyAlerts.filter((a) => a.evaluationStatus !== undefined);
+
+  const closedBySell = shadowed.filter((a) => a.evaluationStatus === "closed_by_sell");
+  const resolved = shadowed.filter((a) => a.evaluationStatus === "resolved");
+  const open = shadowed.filter((a) => a.evaluationStatus === "open");
+  const unableToValue = shadowed.filter((a) => a.evaluationStatus === "unable_to_value");
+
+  const realizedClosedPnl = closedBySell.reduce(
+    (sum, a) => sum + (a.evaluatedPnlUsd ?? 0),
+    0,
+  );
+  const realizedResolvedPnl = resolved.reduce(
+    (sum, a) => sum + (a.evaluatedPnlUsd ?? 0),
+    0,
+  );
+  const unrealizedPnl = open.reduce((sum, a) => sum + (a.evaluatedPnlUsd ?? 0), 0);
+  const totalPnl = realizedClosedPnl + realizedResolvedPnl + unrealizedPnl;
+
+  const today = new Date().toISOString().slice(0, 10);
+
+  console.log(`
+=========================================
+ Shadow PnL Report — ${today}
+=========================================
+  total alerts logged:         ${all.length} (${buyAlerts.length} buys, ${sellAlerts.length} sells)
+  shadow positions opened:     ${shadowed.length}
+
+  closed by leader exit:       ${String(closedBySell.length).padStart(3)}  realized PnL: ${formatPnl(realizedClosedPnl)}
+  resolved (held to outcome):  ${String(resolved.length).padStart(3)}  realized PnL: ${formatPnl(realizedResolvedPnl)}
+  still open (mark-to-market): ${String(open.length).padStart(3)}  unrealized PnL: ${formatPnl(unrealizedPnl)}
+  unable to value:             ${String(unableToValue.length).padStart(3)}
+
+  total realized + unrealized PnL: ${formatPnl(totalPnl)}`);
+
+  // Per-leader breakdown
+  const leaderMap = new Map<string, Alert[]>();
+  for (const a of shadowed) {
+    const existing = leaderMap.get(a.leaderName) ?? [];
+    existing.push(a);
+    leaderMap.set(a.leaderName, existing);
+  }
+
+  if (leaderMap.size > 0) {
+    console.log("\n  per-leader breakdown:");
+    for (const [name, positions] of leaderMap) {
+      const closed = positions.filter(
+        (a) => a.evaluationStatus === "closed_by_sell" || a.evaluationStatus === "resolved",
+      );
+      const stillOpen = positions.filter((a) => a.evaluationStatus === "open");
+      const realized = closed.reduce((sum, a) => sum + (a.evaluatedPnlUsd ?? 0), 0);
+      const unrealized = stillOpen.reduce(
+        (sum, a) => sum + (a.evaluatedPnlUsd ?? 0),
+        0,
+      );
+      const total = realized + unrealized;
+      console.log(
+        `    ${name.padEnd(24)} ${String(positions.length).padStart(3)} positions  closed ${closed.length}, open ${stillOpen.length}   ${formatPnl(total).padStart(9)} (realized ${formatPnl(realized)}, unrealized ${formatPnl(unrealized)})`,
+      );
+    }
+  }
+
+  console.log(`
+  caveats applied:
+  - Simple-exit model: each (leader, market, outcome) opens once on first BUY
+    and closes once on first subsequent SELL. Multi-stage exits and re-entries
+    are not modeled — this can overstate PnL for leaders who scale out of
+    losing positions.
+  - Hypothetical entry uses best ask at alert time, not actual fill simulation.
+  - Hypothetical exit uses best bid at the leader's first sell-alert time.
+  - Polymarket fees not deducted (real PnL would be ~2% lower).
+`);
+}
+
 async function main() {
   const db = openDb(DB_PATH);
 
-  await evaluateOpenPositions(db);
+  await evaluateShadowedBuys(db);
   printReport(db);
 }
 

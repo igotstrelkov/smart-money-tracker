@@ -1,7 +1,6 @@
 // Entry point for the smart-money tracker.
-// Stage 8: production-ready entry point.
 // Polls all wallets, enriches with Gamma + CLOB, sends Telegram alerts,
-// logs shadow positions, handles graceful shutdown.
+// and logs every alert (BUY/SELL) to the alerts table for shadow PnL tracking.
 
 import "dotenv/config";
 import { mkdirSync } from "node:fs";
@@ -11,16 +10,19 @@ import { loadConfig, loadSlate } from "./config.js";
 import { enrichTrade } from "./enrich.js";
 import { sendTelegram } from "./notify.js";
 import {
+  findFirstBuyForGroup,
+  findRecentAlertForLogicalTrade,
   hasSeenTrade,
-  logShadowPosition,
+  logAlert,
   markTradeSeen,
   openDb,
 } from "./store.js";
-import type { EnrichedTrade, ShadowPosition, Trade } from "./types.js";
+import type { Alert, EnrichedTrade, Trade } from "./types.js";
 
 const POLL_INTERVAL_MS = 30_000;
 const WALLET_DELAY_MS = 200;
 const STALE_THRESHOLD_MS = 5 * 60 * 1000; // 5 minutes
+const DUPLICATE_FILL_WINDOW_S = 120; // suppress duplicate Telegram for fills within 2 min
 const DB_PATH = "data/tracker.db";
 
 function sleep(ms: number): Promise<void> {
@@ -32,7 +34,6 @@ function formatTelegramMessage(name: string, trade: EnrichedTrade): string {
   const size = trade.size.toFixed(0);
   const cost = (trade.price * trade.size).toFixed(2);
 
-  // If we have order book data, use the full enriched format
   if (
     trade.bestAsk !== null &&
     trade.slippage !== null &&
@@ -52,7 +53,6 @@ function formatTelegramMessage(name: string, trade: EnrichedTrade): string {
     ].join("\n");
   }
 
-  // Fallback: simple format without order book data
   return `[${name}] ${trade.side} ${trade.outcome} on "${trade.title}" at $${price} × ${size} ($${cost})\n${trade.eventUrl}`;
 }
 
@@ -82,44 +82,79 @@ async function pollWallet(
     if (hasSeenTrade(db, trade.transactionHash)) continue;
 
     const enriched = await enrichTrade(db, trade);
-    const message = formatTelegramMessage(entry.name, enriched);
     console.log(formatConsoleLine(entry.name, trade));
 
-    try {
-      await sendTelegram(message);
-      markTradeSeen(db, trade.transactionHash, entry.address);
-      newCount++;
+    // Duplicate-fill suppression: if we recently alerted for this
+    // (leader, market, side), skip the Telegram send but still log.
+    const recent = findRecentAlertForLogicalTrade(
+      db,
+      entry.address,
+      trade.conditionId,
+      trade.side,
+      DUPLICATE_FILL_WINDOW_S,
+    );
+    const suppressTelegram = recent !== null;
 
-      // Shadow log BUY trades only (buy-and-hold approximation)
-      if (trade.side === "BUY") {
-        const entryPrice = enriched.bestAsk ?? trade.price + 0.02;
-        const shadow: ShadowPosition = {
-          transactionHash: trade.transactionHash,
-          leaderWallet: entry.address,
-          leaderName: entry.name,
-          conditionId: trade.conditionId,
-          tokenId: trade.asset,
-          outcome: trade.outcome,
-          side: trade.side,
-          leaderFillPrice: trade.price,
-          hypotheticalEntryPrice: entryPrice,
-          hypotheticalSizeUsd: shadowSizeUsd,
-          marketTitle: trade.title,
-          marketSlug: trade.slug,
-          alertTimestamp: Date.now(),
-          evaluationStatus: "open",
-          evaluatedAt: null,
-          evaluatedValueUsd: null,
-          evaluatedPnlUsd: null,
-        };
-        logShadowPosition(db, shadow);
-        console.log(
-          `Shadow position logged: ${entry.name} BUY ${trade.outcome} @ $${entryPrice.toFixed(2)} ($${shadowSizeUsd})`,
-        );
+    // Determine shadow tracking fields and hypothetical price.
+    let hypotheticalPrice: number | undefined;
+    let shadowSize: number | undefined;
+    let evaluationStatus: Alert["evaluationStatus"] | undefined;
+
+    if (trade.side === "BUY") {
+      hypotheticalPrice = enriched.bestAsk ?? undefined;
+      const firstBuy = findFirstBuyForGroup(
+        db,
+        entry.address,
+        trade.conditionId,
+        trade.outcome,
+      );
+      if (firstBuy === null) {
+        shadowSize = shadowSizeUsd;
+        evaluationStatus = "open";
       }
+    } else {
+      hypotheticalPrice = enriched.bestBid ?? undefined;
+    }
+
+    const alert: Alert = {
+      transactionHash: trade.transactionHash,
+      leaderWallet: entry.address,
+      leaderName: entry.name,
+      conditionId: trade.conditionId,
+      tokenId: trade.asset,
+      outcome: trade.outcome,
+      side: trade.side,
+      leaderFillPrice: trade.price,
+      marketTitle: trade.title,
+      marketSlug: trade.slug,
+      alertTimestamp: Date.now(),
+      hypotheticalPrice,
+      hypotheticalSizeUsd: shadowSize,
+      evaluationStatus,
+    };
+
+    logAlert(db, alert);
+    markTradeSeen(db, trade.transactionHash, entry.address);
+    newCount++;
+
+    if (evaluationStatus === "open" && hypotheticalPrice !== undefined) {
+      console.log(
+        `Shadow position opened: ${entry.name} BUY ${trade.outcome} @ $${hypotheticalPrice.toFixed(2)} ($${shadowSize})`,
+      );
+    }
+
+    if (suppressTelegram) {
+      console.log(
+        `Telegram suppressed (duplicate fill within ${DUPLICATE_FILL_WINDOW_S}s) for ${entry.name} ${trade.side} on ${trade.title.slice(0, 40)}`,
+      );
+      continue;
+    }
+
+    try {
+      await sendTelegram(formatTelegramMessage(entry.name, enriched));
     } catch (err) {
       console.error(
-        `Telegram send failed for tx ${trade.transactionHash.slice(0, 10)}…, will retry next poll:`,
+        `Telegram send failed for tx ${trade.transactionHash.slice(0, 10)}…:`,
         err,
       );
     }
@@ -135,7 +170,6 @@ async function main() {
   mkdirSync("data", { recursive: true });
   const db = openDb(DB_PATH);
 
-  // Graceful shutdown
   const shutdown = (signal: string) => {
     console.log(
       `\n[${new Date().toISOString()}] Received ${signal}, shutting down...`,
@@ -146,7 +180,6 @@ async function main() {
   process.on("SIGINT", () => shutdown("SIGINT"));
   process.on("SIGTERM", () => shutdown("SIGTERM"));
 
-  // Let pm2 restart on unhandled rejections
   process.on("unhandledRejection", (err) => {
     console.error("Unhandled rejection, crashing:", err);
     process.exit(1);

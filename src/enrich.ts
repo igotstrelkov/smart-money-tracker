@@ -38,6 +38,7 @@ export async function enrichTrade(
 
   // --- Order book (CLOB) ---
   let bestAsk: number | null = null;
+  let bestBid: number | null = null;
   let depthWithin2cUsd: number | null = null;
   let slippage: number | null = null;
 
@@ -45,6 +46,7 @@ export async function enrichTrade(
     const book = await fetchOrderBook(trade.asset);
     if (book) {
       bestAsk = book.bestAsk;
+      bestBid = book.bestBid;
       depthWithin2cUsd = book.depthWithin2cUsd;
       slippage = book.bestAsk - trade.price;
     }
@@ -52,5 +54,5 @@ export async function enrichTrade(
     console.error(`CLOB fetch failed for asset ${trade.asset.slice(0, 10)}…:`, err);
   }
 
-  return { ...trade, eventUrl, bestAsk, depthWithin2cUsd, slippage };
+  return { ...trade, eventUrl, bestAsk, bestBid, depthWithin2cUsd, slippage };
 }

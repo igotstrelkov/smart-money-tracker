@@ -26,26 +26,27 @@ export interface MarketMeta {
 export interface EnrichedTrade extends Trade {
   eventUrl: string;
   bestAsk: number | null;
+  bestBid: number | null;
   depthWithin2cUsd: number | null;
   slippage: number | null;
 }
 
-export interface ShadowPosition {
+export interface Alert {
   transactionHash: string;
   leaderWallet: string;
   leaderName: string;
   conditionId: string;
   tokenId: string;
   outcome: string;
-  side: string;
+  side: "BUY" | "SELL";
   leaderFillPrice: number;
-  hypotheticalEntryPrice: number;
-  hypotheticalSizeUsd: number;
   marketTitle: string;
   marketSlug: string;
   alertTimestamp: number;
-  evaluationStatus: "open" | "resolved" | "unable_to_value";
-  evaluatedAt: number | null;
-  evaluatedValueUsd: number | null;
-  evaluatedPnlUsd: number | null;
+  hypotheticalPrice?: number;
+  hypotheticalSizeUsd?: number;
+  evaluationStatus?: "open" | "closed_by_sell" | "resolved" | "unable_to_value";
+  evaluatedAt?: number;
+  evaluatedValueUsd?: number;
+  evaluatedPnlUsd?: number;
 }
