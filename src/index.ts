@@ -135,12 +135,16 @@ async function pollWallet(
     const duplicateFillSuppressed = recent !== null;
 
     // Determine shadow tracking fields and hypothetical price.
+    // If the order book wasn't available, fall back to the leader's fill
+    // price ± 2¢ as a defensive estimate so the evaluator can still value
+    // the position later. Clamp to the valid 0..1 price range.
     let hypotheticalPrice: number | undefined;
     let shadowSize: number | undefined;
     let evaluationStatus: Alert["evaluationStatus"] | undefined;
 
     if (trade.side === "BUY") {
-      hypotheticalPrice = enriched.bestAsk ?? undefined;
+      hypotheticalPrice =
+        enriched.bestAsk ?? Math.min(1, trade.price + 0.02);
       const firstBuy = findFirstBuyForGroup(
         db,
         entry.address,
@@ -152,7 +156,8 @@ async function pollWallet(
         evaluationStatus = "open";
       }
     } else {
-      hypotheticalPrice = enriched.bestBid ?? undefined;
+      hypotheticalPrice =
+        enriched.bestBid ?? Math.max(0.01, trade.price - 0.02);
     }
 
     const alert: Alert = {
