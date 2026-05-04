@@ -26,18 +26,73 @@ function formatPnl(value: number): string {
   return `${sign}$${value.toFixed(2)}`;
 }
 
-async function evaluateShadowedBuys(db: ReturnType<typeof openDb>): Promise<void> {
-  const buys = getShadowedBuyAlerts(db);
-  console.log(`Evaluating ${buys.length} shadow positions...\n`);
+function normalizeOutcome(s: string): string {
+  return s.trim().toLowerCase();
+}
+
+interface UnableBreakdown {
+  marketNotFound: number;
+  outcomeNameMismatch: number;
+  ghostBook: number;
+  noBids: number;
+  noEntryPrice: number;
+  noClosingSellPrice: number;
+  resolvedNonFinitePrice: number;
+}
+
+interface RunCounts {
+  total: number;
+  resolved: number;
+  closedBySell: number;
+  open: number;
+  unableToValue: number;
+  unable: UnableBreakdown;
+}
+
+function newCounts(): RunCounts {
+  return {
+    total: 0,
+    resolved: 0,
+    closedBySell: 0,
+    open: 0,
+    unableToValue: 0,
+    unable: {
+      marketNotFound: 0,
+      outcomeNameMismatch: 0,
+      ghostBook: 0,
+      noBids: 0,
+      noEntryPrice: 0,
+      noClosingSellPrice: 0,
+      resolvedNonFinitePrice: 0,
+    },
+  };
+}
+
+async function evaluateShadowedBuys(
+  db: ReturnType<typeof openDb>,
+  counts: RunCounts,
+): Promise<void> {
+  // Re-attempt 'open' and 'unable_to_value' positions every run.
+  // Don't re-evaluate already-finalized 'resolved' or 'closed_by_sell'.
+  const all = getShadowedBuyAlerts(db);
+  const buys = all.filter(
+    (a) => a.evaluationStatus === "open" || a.evaluationStatus === "unable_to_value",
+  );
+  console.log(
+    `Evaluating ${buys.length} shadow positions (open + unable_to_value)...\n`,
+  );
 
   for (let i = 0; i < buys.length; i++) {
     const buy = buys[i];
+    counts.total++;
 
     if (buy.hypotheticalPrice === undefined || buy.hypotheticalSizeUsd === undefined) {
       console.log(
         `  [unable_to_value] ${buy.leaderName}: "${buy.marketTitle}" — no entry price recorded`,
       );
       updateShadowEvaluation(db, buy.transactionHash, null, null, "unable_to_value");
+      counts.unableToValue++;
+      counts.unable.noEntryPrice++;
       continue;
     }
 
@@ -64,6 +119,8 @@ async function evaluateShadowedBuys(db: ReturnType<typeof openDb>): Promise<void
             null,
             "unable_to_value",
           );
+          counts.unableToValue++;
+          counts.unable.noClosingSellPrice++;
         } else {
           const proceedsUsd = shares * closingSell.hypotheticalPrice;
           const pnlUsd = proceedsUsd - buy.hypotheticalSizeUsd;
@@ -78,6 +135,7 @@ async function evaluateShadowedBuys(db: ReturnType<typeof openDb>): Promise<void
             "closed_by_sell",
             closingSell.alertTimestamp,
           );
+          counts.closedBySell++;
         }
         await sleep(DELAY_MS);
         continue;
@@ -91,11 +149,16 @@ async function evaluateShadowedBuys(db: ReturnType<typeof openDb>): Promise<void
           `  [unable_to_value] ${buy.leaderName}: "${buy.marketTitle}" — Gamma returned nothing`,
         );
         updateShadowEvaluation(db, buy.transactionHash, null, null, "unable_to_value");
+        counts.unableToValue++;
+        counts.unable.marketNotFound++;
       } else if (resolution.closed) {
-        const outcomeIndex = resolution.outcomes.indexOf(buy.outcome);
+        const target = normalizeOutcome(buy.outcome);
+        const outcomeIndex = resolution.outcomes.findIndex(
+          (o) => normalizeOutcome(o) === target,
+        );
         if (outcomeIndex === -1) {
-          console.log(
-            `  [unable_to_value] ${buy.leaderName}: "${buy.marketTitle}" — outcome "${buy.outcome}" not found in ${JSON.stringify(resolution.outcomes)}`,
+          console.warn(
+            `  [unable_to_value] ${buy.leaderName}: outcome "${buy.outcome}" not found in [${resolution.outcomes.join(", ")}] for "${buy.marketTitle}"`,
           );
           updateShadowEvaluation(
             db,
@@ -104,26 +167,49 @@ async function evaluateShadowedBuys(db: ReturnType<typeof openDb>): Promise<void
             null,
             "unable_to_value",
           );
+          counts.unableToValue++;
+          counts.unable.outcomeNameMismatch++;
         } else {
           const finalPrice = resolution.outcomePrices[outcomeIndex];
-          const proceedsUsd = shares * finalPrice;
-          const pnlUsd = proceedsUsd - buy.hypotheticalSizeUsd;
-          console.log(
-            `  [resolved] ${buy.leaderName}: "${buy.marketTitle}" ${buy.outcome} → $${finalPrice.toFixed(2)} → ${formatPnl(pnlUsd)}`,
-          );
-          updateShadowEvaluation(
-            db,
-            buy.transactionHash,
-            proceedsUsd,
-            pnlUsd,
-            "resolved",
-          );
+          if (!Number.isFinite(finalPrice)) {
+            console.warn(
+              `  [unable_to_value] ${buy.leaderName}: "${buy.marketTitle}" — non-finite outcomePrice ${finalPrice}`,
+            );
+            updateShadowEvaluation(
+              db,
+              buy.transactionHash,
+              null,
+              null,
+              "unable_to_value",
+            );
+            counts.unableToValue++;
+            counts.unable.resolvedNonFinitePrice++;
+          } else {
+            const proceedsUsd = shares * finalPrice;
+            const pnlUsd = proceedsUsd - buy.hypotheticalSizeUsd;
+            console.log(
+              `  [resolved] ${buy.leaderName}: "${buy.marketTitle}" ${buy.outcome} → $${finalPrice.toFixed(2)} → ${formatPnl(pnlUsd)}`,
+            );
+            updateShadowEvaluation(
+              db,
+              buy.transactionHash,
+              proceedsUsd,
+              pnlUsd,
+              "resolved",
+            );
+            counts.resolved++;
+          }
         }
       } else {
+        // Still trading — mark to current bid.
+        // fetchOrderBook already does defensive bid sorting and ghost detection
+        // (returns null for ghost books).
         const book = await fetchOrderBook(buy.tokenId);
         if (!book) {
+          // Could be 404, empty book, or ghost — all unable_to_value.
+          // Categorize as ghostBook since fetchOrderBook collapses these cases.
           console.log(
-            `  [unable_to_value] ${buy.leaderName}: "${buy.marketTitle}" — no order book`,
+            `  [unable_to_value] ${buy.leaderName}: "${buy.marketTitle}" — no usable order book`,
           );
           updateShadowEvaluation(
             db,
@@ -132,6 +218,21 @@ async function evaluateShadowedBuys(db: ReturnType<typeof openDb>): Promise<void
             null,
             "unable_to_value",
           );
+          counts.unableToValue++;
+          counts.unable.ghostBook++;
+        } else if (!Number.isFinite(book.bestBid) || book.bestBid <= 0) {
+          console.log(
+            `  [unable_to_value] ${buy.leaderName}: "${buy.marketTitle}" — no bids on book`,
+          );
+          updateShadowEvaluation(
+            db,
+            buy.transactionHash,
+            null,
+            null,
+            "unable_to_value",
+          );
+          counts.unableToValue++;
+          counts.unable.noBids++;
         } else {
           const proceedsUsd = shares * book.bestBid;
           const pnlUsd = proceedsUsd - buy.hypotheticalSizeUsd;
@@ -139,6 +240,7 @@ async function evaluateShadowedBuys(db: ReturnType<typeof openDb>): Promise<void
             `  [open/mtm] ${buy.leaderName}: "${buy.marketTitle}" ${buy.outcome} → bid $${book.bestBid.toFixed(2)} → ${formatPnl(pnlUsd)}`,
           );
           updateShadowEvaluation(db, buy.transactionHash, proceedsUsd, pnlUsd, "open");
+          counts.open++;
         }
       }
     } catch (err) {
@@ -149,6 +251,23 @@ async function evaluateShadowedBuys(db: ReturnType<typeof openDb>): Promise<void
       await sleep(DELAY_MS);
     }
   }
+}
+
+function printSummary(counts: RunCounts): void {
+  console.log(`
+Evaluated ${counts.total} positions:
+  resolved:           ${counts.resolved}
+  closed_by_sell:     ${counts.closedBySell}
+  open (mark-to-mkt): ${counts.open}
+  unable_to_value:    ${counts.unableToValue}
+    └ unable_to_value breakdown:
+        market not found:       ${counts.unable.marketNotFound}
+        outcome name mismatch:  ${counts.unable.outcomeNameMismatch}
+        ghost / no order book:  ${counts.unable.ghostBook}
+        no bids on book:        ${counts.unable.noBids}
+        no entry price:         ${counts.unable.noEntryPrice}
+        no closing-sell price:  ${counts.unable.noClosingSellPrice}
+        non-finite outcome $:   ${counts.unable.resolvedNonFinitePrice}`);
 }
 
 function printReport(db: ReturnType<typeof openDb>): void {
@@ -195,7 +314,6 @@ function printReport(db: ReturnType<typeof openDb>): void {
 
   total realized + unrealized PnL: ${formatPnl(totalPnl)}`);
 
-  // Per-leader breakdown
   const leaderMap = new Map<string, Alert[]>();
   for (const a of shadowed) {
     const existing = leaderMap.get(a.leaderName) ?? [];
@@ -207,7 +325,9 @@ function printReport(db: ReturnType<typeof openDb>): void {
     console.log("\n  per-leader breakdown:");
     for (const [name, positions] of leaderMap) {
       const closed = positions.filter(
-        (a) => a.evaluationStatus === "closed_by_sell" || a.evaluationStatus === "resolved",
+        (a) =>
+          a.evaluationStatus === "closed_by_sell" ||
+          a.evaluationStatus === "resolved",
       );
       const stillOpen = positions.filter((a) => a.evaluationStatus === "open");
       const realized = closed.reduce((sum, a) => sum + (a.evaluatedPnlUsd ?? 0), 0);
@@ -236,8 +356,10 @@ function printReport(db: ReturnType<typeof openDb>): void {
 
 async function main() {
   const db = openDb(DB_PATH);
+  const counts = newCounts();
 
-  await evaluateShadowedBuys(db);
+  await evaluateShadowedBuys(db, counts);
+  printSummary(counts);
   printReport(db);
 }
 
