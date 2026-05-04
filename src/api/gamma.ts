@@ -32,12 +32,14 @@ export async function fetchMarketByConditionId(
   conditionId: string,
   slug?: string
 ): Promise<MarketMeta | null> {
-  // Try condition_ids lookup first
-  const marketsUrl = `https://gamma-api.polymarket.com/markets?condition_ids=${conditionId}`;
+  // Try condition_ids lookup first. Include all market states (closed/archived/active)
+  // so resolved markets are returned, not filtered out by Gamma's defaults.
+  const marketsUrl = `https://gamma-api.polymarket.com/markets?condition_ids=${conditionId}&closed=true&archived=true&active=true&limit=1`;
   const marketsRes = await fetch(marketsUrl);
 
   if (marketsRes.ok) {
     const data = (await marketsRes.json()) as GammaMarketResponse[];
+    console.log(`[gamma] ${marketsUrl} → ${data?.length ?? 0} markets`);
     if (Array.isArray(data) && data.length > 0) {
       const market = data[0];
       return {
@@ -51,11 +53,12 @@ export async function fetchMarketByConditionId(
 
   // Fallback: try events endpoint with slug from the trade
   if (slug) {
-    const eventsUrl = `https://gamma-api.polymarket.com/events?slug=${slug}`;
+    const eventsUrl = `https://gamma-api.polymarket.com/events?slug=${slug}&closed=true&archived=true&active=true&limit=1`;
     const eventsRes = await fetch(eventsUrl);
 
     if (eventsRes.ok) {
       const events = (await eventsRes.json()) as GammaEventResponse[];
+      console.log(`[gamma] ${eventsUrl} → ${events?.length ?? 0} events`);
       if (Array.isArray(events) && events.length > 0) {
         const event = events[0];
         return {
@@ -98,12 +101,14 @@ export async function fetchMarketResolution(
   conditionId: string,
   slug: string
 ): Promise<MarketResolutionInfo | null> {
-  // Try condition_ids first
-  const marketsUrl = `https://gamma-api.polymarket.com/markets?condition_ids=${conditionId}`;
+  // Try condition_ids first. Include all market states so resolved markets
+  // (which is exactly what we want for PnL evaluation) aren't filtered out.
+  const marketsUrl = `https://gamma-api.polymarket.com/markets?condition_ids=${conditionId}&closed=true&archived=true&active=true&limit=1`;
   const marketsRes = await fetch(marketsUrl);
 
   if (marketsRes.ok) {
     const data = (await marketsRes.json()) as GammaMarketResponse[];
+    console.log(`[gamma] ${marketsUrl} → ${data?.length ?? 0} markets`);
     if (Array.isArray(data) && data.length > 0) {
       const m = data[0];
       return {
@@ -116,11 +121,12 @@ export async function fetchMarketResolution(
   }
 
   // Fallback: events endpoint with slug, find matching market by conditionId
-  const eventsUrl = `https://gamma-api.polymarket.com/events?slug=${slug}`;
+  const eventsUrl = `https://gamma-api.polymarket.com/events?slug=${slug}&closed=true&archived=true&active=true&limit=1`;
   const eventsRes = await fetch(eventsUrl);
 
   if (eventsRes.ok) {
     const events = (await eventsRes.json()) as GammaEventResponse[];
+    console.log(`[gamma] ${eventsUrl} → ${events?.length ?? 0} events`);
     if (Array.isArray(events) && events.length > 0) {
       const event = events[0];
       const market = event.markets?.find((m) => m.conditionId === conditionId);
