@@ -1,102 +1,37 @@
 [
   {
-    "address": "0x5bec79df9add70a3892041ab1a5516b60f53b215",
-    "name": "guongAI",
+    "address": "0x8fd1536113a96b3615825f397ad1cfc8dbd7bfe8",
+    "name": "FakerV",
     "rationale": "highest monthly PnL, sports"
   },
   {
-    "address": "0xea2b4224411e723499a803ce3f4758779fb31fc6",
-    "name": "frankfrankfrank",
+    "address": "0xb6353a9608eccba83323bdb7ee4ec8b7af68bef0",
+    "name": "rangnihui",
     "rationale": "362 markets, sports diversity"
   },
   {
-    "address": "0xacb206b460a17382a734de8d931cc176307eb989",
-    "name": "AppleTime67",
+    "address": "0x8d9f8127677a6c64219b1ba5ecd126043551787a",
+    "name": "whatyouknowboutlove",
     "rationale": "all-rounder sports"
   },
   {
-    "address": "0xa8e089ade142c95538e06196e09c85681112ad50",
-    "name": "Wannac",
+    "address": "0x7a0face7188ae921d0fa1301e237280f73041305",
+    "name": "Gengfrauds",
     "rationale": "high-conviction sizing, sports"
   },
   {
-    "address": "0x96489abcb9f583d6835c8ef95ffc923d05a86825",
-    "name": "anoin123",
+    "address": "0x183f8b17cfb09c9115d068b2da3033b54f4c85e3",
+    "name": "BetsAusmAudimax",
     "rationale": "politics + economics bridge"
   },
   {
-    "address": "0x44c1dfe43260c94ed4f1d00de2e1f80fb113ebc1",
-    "name": "aenews2",
+    "address": "0x2759769cd371bee44ec5bfc5e72c7f1f092b2b38",
+    "name": "bossoskil1",
     "rationale": "weather + politics + culture"
   },
   {
     "address": "0x0c0e270cf879583d6a0142fc817e05b768d0434e",
-    "name": "The Spirit of Ukraine",
+    "name": "SharkbetX-com",
     "rationale": "multi-category, long history"
-  },
-  {
-    "address": "0xe7a2052a8b7c6b865e3eb3d16300a4db7432ae70",
-    "name": "TheOneto3",
-    "rationale": "91% buys, 285 markets"
-  },
-  {
-    "address": "0xe72bb501df5306c75c89383d48a1e81073fbb0a0",
-    "name": "norrisfan",
-    "rationale": "82% buys, 215 markets"
-  },
-  {
-    "address": "0x85f031d069de300055900c4055c1baeb6bde3f67",
-    "name": "RJW1",
-    "rationale": "92% buys, $3.5k median"
-  },
-  {
-    "address": "0x3257501508b82c2f7aeb914088b6ed089f362f3b",
-    "name": "sportbetss",
-    "rationale": "crypto specialist, 353 markets, 94% buys"
-  },
-  {
-    "address": "0x16bd7cc71f6da1e77d1d8255677abc75b9bae288",
-    "name": "ddalkkak",
-    "rationale": "selective crypto specialist, 219 markets, 3.2/day"
-  },
-  {
-    "address": "0x34026514e0bda25f0f9fbb053fe3070cdc8c9446",
-    "name": "madril",
-    "rationale": "high-conviction crypto, $29k median trade"
-  },
-  {
-    "address": "0x2785e7022dc20757108204b13c08cea8613b70ae",
-    "name": "poorsob",
-    "rationale": "patient high-conviction, $11k median, 1.2/day"
-  },
-  {
-    "address": "0xb1ca909e848cc24ec4e220ce1c453bc290c51705",
-    "name": "NonceChaser",
-    "rationale": "politics specialist, $28k/mo, selective"
-  },
-  {
-    "address": "0xecb14ac6e9ca447ce2f2912e6217b43d7b655da3",
-    "name": "SaylorMoon",
-    "rationale": "politics specialist, 208 markets"
-  },
-  {
-    "address": "0xc6587b11a2209e46dfe3928b31c5514a8e33b784",
-    "name": "Erasmus",
-    "rationale": "politics specialist, $5k median trade"
-  },
-  {
-    "address": "0x900e2ba4b715e8e5088899948355d74c796ff6bf",
-    "name": "TheySeemeBuyingTheyHatin",
-    "rationale": "weather specialist, 345 markets"
-  },
-  {
-    "address": "0x6139c42e48cf190e67a0a85d492413b499336b7a",
-    "name": "RememberAmalek",
-    "rationale": "weather specialist, 184 markets"
-  },
-  {
-    "address": "0xe8ff0a56d848954b60e8e8ed99637e3c50ddc93b",
-    "name": "BlindGibbon",
-    "rationale": "selective weather specialist, 2.7/day"
   }
 ]
