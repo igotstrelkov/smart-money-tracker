@@ -3,6 +3,8 @@
 // logic: closed by leader sell, resolved by market, or still open / unable to value.
 // Run on demand: npx tsx src/evaluate-shadow.ts
 
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { fetchOrderBook } from "./api/clob.js";
 import { fetchMarketResolution } from "./api/gamma.js";
 import {
@@ -28,6 +30,26 @@ function formatPnl(value: number): string {
 
 function normalizeOutcome(s: string): string {
   return s.trim().toLowerCase();
+}
+
+// Load the current slate.json. Returns a set of lowercase wallet addresses.
+// If the file is missing or malformed, returns an empty set and the
+// per-leader breakdown falls back to showing everyone (fail-open).
+function loadActiveSlate(): Set<string> {
+  const slatePath = resolve(process.cwd(), "slate.json");
+  try {
+    const raw = readFileSync(slatePath, "utf-8");
+    const entries = JSON.parse(raw) as Array<{
+      address: string;
+      name?: string;
+    }>;
+    return new Set(entries.map((e) => e.address.toLowerCase()));
+  } catch (e) {
+    console.warn(
+      `  [warn] could not load slate.json (${(e as Error).message}); showing all leaders.`,
+    );
+    return new Set();
+  }
 }
 
 interface UnableBreakdown {
@@ -76,7 +98,8 @@ async function evaluateShadowedBuys(
   // Don't re-evaluate already-finalized 'resolved' or 'closed_by_sell'.
   const all = getShadowedBuyAlerts(db);
   const buys = all.filter(
-    (a) => a.evaluationStatus === "open" || a.evaluationStatus === "unable_to_value",
+    (a) =>
+      a.evaluationStatus === "open" || a.evaluationStatus === "unable_to_value",
   );
   console.log(
     `Evaluating ${buys.length} shadow positions (open + unable_to_value)...\n`,
@@ -86,11 +109,20 @@ async function evaluateShadowedBuys(
     const buy = buys[i];
     counts.total++;
 
-    if (buy.hypotheticalPrice === undefined || buy.hypotheticalSizeUsd === undefined) {
+    if (
+      buy.hypotheticalPrice === undefined ||
+      buy.hypotheticalSizeUsd === undefined
+    ) {
       console.log(
         `  [unable_to_value] ${buy.leaderName}: "${buy.marketTitle}" — no entry price recorded`,
       );
-      updateShadowEvaluation(db, buy.transactionHash, null, null, "unable_to_value");
+      updateShadowEvaluation(
+        db,
+        buy.transactionHash,
+        null,
+        null,
+        "unable_to_value",
+      );
       counts.unableToValue++;
       counts.unable.noEntryPrice++;
       continue;
@@ -142,13 +174,22 @@ async function evaluateShadowedBuys(
       }
 
       // No closing sell — check market resolution / mark-to-market
-      const resolution = await fetchMarketResolution(buy.conditionId, buy.marketSlug);
+      const resolution = await fetchMarketResolution(
+        buy.conditionId,
+        buy.marketSlug,
+      );
 
       if (!resolution) {
         console.log(
           `  [unable_to_value] ${buy.leaderName}: "${buy.marketTitle}" — Gamma returned nothing`,
         );
-        updateShadowEvaluation(db, buy.transactionHash, null, null, "unable_to_value");
+        updateShadowEvaluation(
+          db,
+          buy.transactionHash,
+          null,
+          null,
+          "unable_to_value",
+        );
         counts.unableToValue++;
         counts.unable.marketNotFound++;
       } else if (resolution.closed) {
@@ -239,7 +280,13 @@ async function evaluateShadowedBuys(
           console.log(
             `  [open/mtm] ${buy.leaderName}: "${buy.marketTitle}" ${buy.outcome} → bid $${book.bestBid.toFixed(2)} → ${formatPnl(pnlUsd)}`,
           );
-          updateShadowEvaluation(db, buy.transactionHash, proceedsUsd, pnlUsd, "open");
+          updateShadowEvaluation(
+            db,
+            buy.transactionHash,
+            proceedsUsd,
+            pnlUsd,
+            "open",
+          );
           counts.open++;
         }
       }
@@ -282,10 +329,14 @@ function printReport(db: ReturnType<typeof openDb>): void {
   const sellAlerts = all.filter((a) => a.side === "SELL");
   const shadowed = buyAlerts.filter((a) => a.evaluationStatus !== undefined);
 
-  const closedBySell = shadowed.filter((a) => a.evaluationStatus === "closed_by_sell");
+  const closedBySell = shadowed.filter(
+    (a) => a.evaluationStatus === "closed_by_sell",
+  );
   const resolved = shadowed.filter((a) => a.evaluationStatus === "resolved");
   const open = shadowed.filter((a) => a.evaluationStatus === "open");
-  const unableToValue = shadowed.filter((a) => a.evaluationStatus === "unable_to_value");
+  const unableToValue = shadowed.filter(
+    (a) => a.evaluationStatus === "unable_to_value",
+  );
 
   const realizedClosedPnl = closedBySell.reduce(
     (sum, a) => sum + (a.evaluatedPnlUsd ?? 0),
@@ -295,7 +346,10 @@ function printReport(db: ReturnType<typeof openDb>): void {
     (sum, a) => sum + (a.evaluatedPnlUsd ?? 0),
     0,
   );
-  const unrealizedPnl = open.reduce((sum, a) => sum + (a.evaluatedPnlUsd ?? 0), 0);
+  const unrealizedPnl = open.reduce(
+    (sum, a) => sum + (a.evaluatedPnlUsd ?? 0),
+    0,
+  );
   const totalPnl = realizedClosedPnl + realizedResolvedPnl + unrealizedPnl;
 
   const today = new Date().toISOString().slice(0, 10);
@@ -322,22 +376,77 @@ function printReport(db: ReturnType<typeof openDb>): void {
   }
 
   if (leaderMap.size > 0) {
-    console.log("\n  per-leader breakdown:");
-    for (const [name, positions] of leaderMap) {
-      const closed = positions.filter(
-        (a) =>
-          a.evaluationStatus === "closed_by_sell" ||
-          a.evaluationStatus === "resolved",
-      );
-      const stillOpen = positions.filter((a) => a.evaluationStatus === "open");
-      const realized = closed.reduce((sum, a) => sum + (a.evaluatedPnlUsd ?? 0), 0);
-      const unrealized = stillOpen.reduce(
-        (sum, a) => sum + (a.evaluatedPnlUsd ?? 0),
-        0,
-      );
-      const total = realized + unrealized;
+    const activeWallets = loadActiveSlate();
+
+    const activeLeaders: Array<[string, Alert[]]> = [];
+    const archivedLeaders: Array<[string, Alert[]]> = [];
+
+    for (const entry of leaderMap) {
+      const [, positions] = entry;
+      const wallet = positions[0]?.leaderWallet?.toLowerCase() ?? "";
+      // If slate didn't load (empty set), treat all as active (fail-open)
+      if (activeWallets.size === 0 || activeWallets.has(wallet)) {
+        activeLeaders.push(entry);
+      } else {
+        archivedLeaders.push(entry);
+      }
+    }
+
+    if (activeLeaders.length > 0) {
+      console.log("\n  per-leader breakdown (active slate):");
+      for (const [name, positions] of activeLeaders) {
+        const closed = positions.filter(
+          (a) =>
+            a.evaluationStatus === "closed_by_sell" ||
+            a.evaluationStatus === "resolved",
+        );
+        const stillOpen = positions.filter(
+          (a) => a.evaluationStatus === "open",
+        );
+        const realized = closed.reduce(
+          (sum, a) => sum + (a.evaluatedPnlUsd ?? 0),
+          0,
+        );
+        const unrealized = stillOpen.reduce(
+          (sum, a) => sum + (a.evaluatedPnlUsd ?? 0),
+          0,
+        );
+        const total = realized + unrealized;
+        console.log(
+          `    ${name.padEnd(24)} ${String(positions.length).padStart(3)} positions  closed ${closed.length}, open ${stillOpen.length}   ${formatPnl(total).padStart(9)} (realized ${formatPnl(realized)}, unrealized ${formatPnl(unrealized)})`,
+        );
+      }
+    }
+
+    if (archivedLeaders.length > 0) {
+      let archivedPositions = 0;
+      let archivedClosed = 0;
+      let archivedOpen = 0;
+      let archivedRealized = 0;
+      let archivedUnrealized = 0;
+
+      for (const [, positions] of archivedLeaders) {
+        archivedPositions += positions.length;
+        for (const a of positions) {
+          if (
+            a.evaluationStatus === "closed_by_sell" ||
+            a.evaluationStatus === "resolved"
+          ) {
+            archivedClosed++;
+            archivedRealized += a.evaluatedPnlUsd ?? 0;
+          } else if (a.evaluationStatus === "open") {
+            archivedOpen++;
+            archivedUnrealized += a.evaluatedPnlUsd ?? 0;
+          }
+        }
+      }
+      const archivedTotal = archivedRealized + archivedUnrealized;
+
       console.log(
-        `    ${name.padEnd(24)} ${String(positions.length).padStart(3)} positions  closed ${closed.length}, open ${stillOpen.length}   ${formatPnl(total).padStart(9)} (realized ${formatPnl(realized)}, unrealized ${formatPnl(unrealized)})`,
+        `\n  [${archivedLeaders.length} archived leaders, not in current slate]:`,
+      );
+      console.log(
+        `    ${archivedPositions} positions  closed ${archivedClosed}, open ${archivedOpen}   ${formatPnl(archivedTotal).padStart(9)} (realized ${formatPnl(archivedRealized)}, unrealized ${formatPnl(archivedUnrealized)})`,
       );
     }
   }
