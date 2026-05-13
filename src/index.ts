@@ -8,7 +8,6 @@ import { fetchTrades } from "./api/data.js";
 import type { SlateEntry } from "./config.js";
 import { loadConfig, loadSlate } from "./config.js";
 import { enrichTrade } from "./enrich.js";
-import { sendTelegram } from "./notify.js";
 import {
   findFirstBuyForGroup,
   findRecentAlertForLogicalTrade,
@@ -143,8 +142,7 @@ async function pollWallet(
     let evaluationStatus: Alert["evaluationStatus"] | undefined;
 
     if (trade.side === "BUY") {
-      hypotheticalPrice =
-        enriched.bestAsk ?? Math.min(1, trade.price + 0.02);
+      hypotheticalPrice = enriched.bestAsk ?? Math.min(1, trade.price + 0.02);
       const firstBuy = findFirstBuyForGroup(
         db,
         entry.address,
@@ -207,14 +205,14 @@ async function pollWallet(
       continue;
     }
 
-    try {
-      await sendTelegram(formatTelegramMessage(entry.name, enriched, slippageCents));
-    } catch (err) {
-      console.error(
-        `Telegram send failed for tx ${trade.transactionHash.slice(0, 10)}…:`,
-        err,
-      );
-    }
+    // try {
+    //   await sendTelegram(formatTelegramMessage(entry.name, enriched, slippageCents));
+    // } catch (err) {
+    //   console.error(
+    //     `Telegram send failed for tx ${trade.transactionHash.slice(0, 10)}…:`,
+    //     err,
+    //   );
+    // }
   }
 
   return newCount;
